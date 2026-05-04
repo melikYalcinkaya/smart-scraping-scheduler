@@ -1,12 +1,8 @@
 """
-Ana Deney Koşucusu
-===================
+Ana Deney Koşucusu (DÜZELTİLMİŞ SÜRÜM)
+======================================
 Tüm deneyleri çalıştırır ve sonuçları kaydeder:
-
-Deney 1: Temel karşılaştırma (5 algoritma vs baseline)
-Deney 2: Parametre duyarlılık analizi (her algoritma için)
-Deney 3: Farklı bütçe kısıtlamaları altında performans
-Deney 4: Farklı site sayıları ile ölçeklenebilirlik
+Sınıf ve parametre isimlendirmeleri algorithms.py ile uyumlu hale getirilmiştir.
 """
 
 import sys, os
@@ -21,13 +17,30 @@ from pathlib import Path
 
 from environment import ECommerceEnvironment
 from algorithms import (
-    PeriodicScheduler, AdaptiveCrawler,
-    PriorityQueueScheduler, PoissonMLEScheduler, UCBBanditScheduler
+    BaseScheduler, AdaptiveCrawlScheduler,
+    PriorityQueueScheduler, PoissonScheduler, UCBBanditScheduler
 )
 from metrics import Evaluator, ExperimentResult
 
+# ── UYUMSUZLUK YAMALARI ─────────────────────────────────────────
+# 1. metrics.py 'select_sites' (liste) beklerken, algorithms.py 'select_next_site' (tekil) dönüyor.
+def _select_sites(self, current_time):
+    return [self.select_next_site(current_time) for _ in range(int(self.budget_per_hour))]
+BaseScheduler.select_sites = _select_sites
+
+# 2. algorithms.py içinde eksik olan PeriodicScheduler sınıfını buraya ekliyoruz
+class PeriodicScheduler(BaseScheduler):
+    def __init__(self, n_sites, budget_per_hour=60):
+        super().__init__(n_sites, budget_per_hour)
+        self.current = 0
+    def select_next_site(self, current_time):
+        site = self.current
+        self.current = (self.current + 1) % self.n_sites
+        return site
+# ───────────────────────────────────────────────────────────────
+
 # ── Genel ayarlar ──────────────────────────────────────────────
-RESULTS_DIR = Path(__file__).parent.parent / "results"
+RESULTS_DIR = Path(__file__).parent / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 plt.rcParams.update({
@@ -45,9 +58,7 @@ COLORS = {
     "Adaptive Crawling":    "#3498db",
     "Priority Queue":       "#e74c3c",
     "Poisson MLE":          "#2ecc71",
-    "UCB Bandit (c=1.0)":   "#9b59b6",
-    "UCB Bandit (c=0.5)":   "#e67e22",
-    "UCB Bandit (c=2.0)":   "#1abc9c",
+    "UCB Bandit":           "#9b59b6",
 }
 
 def get_color(name: str) -> str:
@@ -55,6 +66,23 @@ def get_color(name: str) -> str:
         if key in name:
             return color
     return "#34495e"
+
+def get_schedulers(n_sites, budget):
+    """Deneylerde kullanılacak standart algoritma listesini döndürür."""
+    scheds = [
+        PeriodicScheduler(n_sites=n_sites, budget_per_hour=budget),
+        AdaptiveCrawlScheduler(n_sites=n_sites, budget_per_hour=budget),
+        PriorityQueueScheduler(n_sites=n_sites, budget_per_hour=budget),
+        PoissonScheduler(n_sites=n_sites, budget_per_hour=budget),
+        UCBBanditScheduler(n_sites=n_sites, budget_per_hour=budget, exploration_c=1.0)
+    ]
+    # İsimleri grafiklerde düzgün çıkması için manuel atıyoruz
+    scheds[0].name = "Periodic (Baseline)"
+    scheds[1].name = "Adaptive Crawling"
+    scheds[2].name = "Priority Queue"
+    scheds[3].name = "Poisson MLE"
+    scheds[4].name = "UCB Bandit (c=1.0)"
+    return scheds
 
 
 # ══════════════════════════════════════════════════════════════
@@ -68,14 +96,7 @@ def experiment_1_baseline_comparison():
 
     env = ECommerceEnvironment(n_sites=20, seed=42)
     evaluator = Evaluator(env, n_steps=500, time_step=0.5)
-
-    schedulers = [
-        PeriodicScheduler(n_sites=20, budget_per_step=3),
-        AdaptiveCrawler(n_sites=20, budget_per_step=3),
-        PriorityQueueScheduler(n_sites=20, budget_per_step=3),
-        PoissonMLEScheduler(n_sites=20, budget_per_step=3),
-        UCBBanditScheduler(n_sites=20, budget_per_step=3, exploration_c=1.0),
-    ]
+    schedulers = get_schedulers(n_sites=20, budget=3)
 
     results = []
     for sched in schedulers:
@@ -84,14 +105,12 @@ def experiment_1_baseline_comparison():
         results.append(res)
         print(f"✓ ({res.wall_clock_time:.2f}s)")
 
-    # Tablo
     df = pd.DataFrame([r.summary() for r in results])
     df.to_csv(RESULTS_DIR / "exp1_comparison.csv", index=False)
     print("\n📊 Sonuçlar:")
     print(df[["Algorithm", "Data Freshness Rate", "Crawl Efficiency",
               "Change Detection Rate", "Wasted Crawl Ratio", "Avg Staleness"]].to_string(index=False))
 
-    # Grafik 1: Çok metrikli karşılaştırma
     _plot_exp1(results, df)
     return results, df
 
@@ -101,12 +120,12 @@ def _plot_exp1(results, df):
     gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.45, wspace=0.35)
 
     metrics = [
-        ("Data Freshness Rate",   "Veri Güncellik Oranı\n(↑ İyi)",   "Blues_d"),
-        ("Crawl Efficiency",      "Tarama Verimliliği\n(Maliyet/Değişim, ↓ İyi)", "Reds_d"),
-        ("Change Detection Rate", "Değişim Yakalama Oranı\n(↑ İyi)", "Greens_d"),
-        ("Wasted Crawl Ratio",    "Boş Tarama Oranı\n(↓ İyi)",       "Oranges_d"),
-        ("Avg Staleness",         "Ortalama Güncellik Kaybı\n(↓ İyi)", "Purples_d"),
-        ("Total Resource Cost",   "Toplam Kaynak Maliyeti\n(↓ İyi)",  "Greys_d"),
+        ("Data Freshness Rate",   "Veri Güncellik Oranı\n(↑ İyi)"),
+        ("Crawl Efficiency",      "Tarama Verimliliği\n(Maliyet/Değişim, ↓ İyi)"),
+        ("Change Detection Rate", "Değişim Yakalama Oranı\n(↑ İyi)"),
+        ("Wasted Crawl Ratio",    "Boş Tarama Oranı\n(↓ İyi)"),
+        ("Avg Staleness",         "Ortalama Güncellik Kaybı\n(↓ İyi)"),
+        ("Total Resource Cost",   "Toplam Kaynak Maliyeti\n(↓ İyi)"),
     ]
 
     algo_names = [r.algorithm_name for r in results]
@@ -116,7 +135,7 @@ def _plot_exp1(results, df):
                     .replace(" MLE", "\nMLE")
                     .replace("UCB ", "UCB\n") for n in algo_names]
 
-    for idx, (metric, title, cmap) in enumerate(metrics):
+    for idx, (metric, title) in enumerate(metrics):
         ax = fig.add_subplot(gs[idx // 3, idx % 3])
         vals = df[metric].values
         colors = [get_color(n) for n in algo_names]
@@ -125,7 +144,6 @@ def _plot_exp1(results, df):
         ax.set_xticklabels(short_names, fontsize=7.5)
         ax.set_title(title, fontweight="bold")
         ax.set_ylabel(metric.split("(")[0].strip(), fontsize=8)
-        # Değerleri çubukların üstüne yaz
         for bar, val in zip(bars, vals):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() * 1.01,
                     f"{val:.3f}", ha="center", va="bottom", fontsize=7.5)
@@ -136,7 +154,6 @@ def _plot_exp1(results, df):
     plt.close()
     print("  → exp1_comparison.png kaydedildi")
 
-    # Staleness zaman serisi
     fig2, ax2 = plt.subplots(figsize=(12, 5))
     for res in results:
         steps = np.arange(len(res.staleness_history))
@@ -166,12 +183,12 @@ def experiment_2_parameter_sensitivity():
     evaluator = Evaluator(env, n_steps=500, time_step=0.5)
     all_rows = []
 
-    # 2a. Adaptive: base_interval duyarlılığı
     print("  2a. Adaptive Crawling - base_interval...")
     intervals = [0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
     adapt_results = []
     for bi in intervals:
-        sched = AdaptiveCrawler(n_sites=20, budget_per_step=3, base_interval=bi)
+        sched = AdaptiveCrawlScheduler(n_sites=20, budget_per_hour=3, base_interval=bi)
+        sched.name = f"Adaptive Crawling (bi={bi})"
         res = evaluator.run(sched)
         adapt_results.append((bi, res))
         row = res.summary()
@@ -180,27 +197,26 @@ def experiment_2_parameter_sensitivity():
         row["algorithm_group"] = "Adaptive"
         all_rows.append(row)
 
-    # 2b. Adaptive: history_window duyarlılığı
-    print("  2b. Adaptive Crawling - history_window...")
+    print("  2b. Adaptive Crawling - window_size...")
     windows = [3, 5, 10, 20, 50]
     for w in windows:
-        sched = AdaptiveCrawler(n_sites=20, budget_per_step=3, history_window=w)
+        sched = AdaptiveCrawlScheduler(n_sites=20, budget_per_hour=3, window_size=w)
+        sched.name = f"Adaptive Crawling (w={w})"
         res = evaluator.run(sched)
         row = res.summary()
-        row["param_name"] = "history_window"
+        row["param_name"] = "window_size"
         row["param_value"] = w
         row["algorithm_group"] = "Adaptive"
         all_rows.append(row)
 
-    # 2c. Priority Queue: alpha/beta/gamma
     print("  2c. Priority Queue - alpha/beta ağırlıkları...")
     pq_params = [
         (1.0, 1.0, 1.0), (2.0, 1.0, 1.0), (1.0, 2.0, 1.0),
         (1.0, 1.0, 2.0), (0.5, 2.0, 0.5), (2.0, 2.0, 0.5)
     ]
     for a, b, g in pq_params:
-        sched = PriorityQueueScheduler(n_sites=20, budget_per_step=3,
-                                       alpha=a, beta=b, gamma=g)
+        sched = PriorityQueueScheduler(n_sites=20, budget_per_hour=3, alpha=a, beta=b, gamma=g)
+        sched.name = f"Priority Queue ({a},{b},{g})"
         res = evaluator.run(sched)
         row = res.summary()
         row["param_name"] = f"α={a},β={b},γ={g}"
@@ -208,12 +224,12 @@ def experiment_2_parameter_sensitivity():
         row["algorithm_group"] = "PriorityQueue"
         all_rows.append(row)
 
-    # 2d. Poisson: crawl_cost duyarlılığı
     print("  2d. Poisson MLE - crawl_cost...")
     costs = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
     poisson_results = []
     for c in costs:
-        sched = PoissonMLEScheduler(n_sites=20, budget_per_step=3, crawl_cost=c)
+        sched = PoissonScheduler(n_sites=20, budget_per_hour=3, crawl_cost=c)
+        sched.name = f"Poisson MLE (c={c})"
         res = evaluator.run(sched)
         poisson_results.append((c, res))
         row = res.summary()
@@ -222,12 +238,12 @@ def experiment_2_parameter_sensitivity():
         row["algorithm_group"] = "Poisson"
         all_rows.append(row)
 
-    # 2e. UCB: exploration_c duyarlılığı
     print("  2e. UCB Bandit - exploration_c...")
     c_vals = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
     ucb_results = []
     for c in c_vals:
-        sched = UCBBanditScheduler(n_sites=20, budget_per_step=3, exploration_c=c)
+        sched = UCBBanditScheduler(n_sites=20, budget_per_hour=3, exploration_c=c)
+        sched.name = f"UCB Bandit (c={c})"
         res = evaluator.run(sched)
         ucb_results.append((c, res))
         row = res.summary()
@@ -238,7 +254,6 @@ def experiment_2_parameter_sensitivity():
 
     df_params = pd.DataFrame(all_rows)
     df_params.to_csv(RESULTS_DIR / "exp2_sensitivity.csv", index=False)
-
     _plot_exp2(adapt_results, poisson_results, ucb_results, intervals, costs, c_vals)
     return df_params
 
@@ -247,7 +262,6 @@ def _plot_exp2(adapt_res, poisson_res, ucb_res, intervals, costs, c_vals):
     fig, axes = plt.subplots(2, 3, figsize=(16, 10))
     axes = axes.flatten()
 
-    # Adaptive - base_interval → DFR
     vals = [r.data_freshness_rate for _, r in adapt_res]
     axes[0].plot(intervals, vals, "o-", color="#3498db", linewidth=2, markersize=7)
     axes[0].set_xlabel("base_interval (saat)")
@@ -255,7 +269,6 @@ def _plot_exp2(adapt_res, poisson_res, ucb_res, intervals, costs, c_vals):
     axes[0].set_title("Adaptive: base_interval\nvs Veri Güncelliği", fontweight="bold")
     axes[0].grid(alpha=0.3)
 
-    # Adaptive - base_interval → Wasted
     vals2 = [r.wasted_crawl_ratio for _, r in adapt_res]
     axes[1].plot(intervals, vals2, "s-", color="#e74c3c", linewidth=2, markersize=7)
     axes[1].set_xlabel("base_interval (saat)")
@@ -263,7 +276,6 @@ def _plot_exp2(adapt_res, poisson_res, ucb_res, intervals, costs, c_vals):
     axes[1].set_title("Adaptive: base_interval\nvs Boş Tarama Oranı", fontweight="bold")
     axes[1].grid(alpha=0.3)
 
-    # Poisson - crawl_cost → Avg Staleness
     vals3 = [r.avg_staleness for _, r in poisson_res]
     axes[2].plot(costs, vals3, "^-", color="#2ecc71", linewidth=2, markersize=7)
     axes[2].set_xlabel("crawl_cost")
@@ -271,7 +283,6 @@ def _plot_exp2(adapt_res, poisson_res, ucb_res, intervals, costs, c_vals):
     axes[2].set_title("Poisson MLE: crawl_cost\nvs Güncellik Kaybı", fontweight="bold")
     axes[2].grid(alpha=0.3)
 
-    # UCB - c → CDR
     vals4 = [r.change_detection_rate for _, r in ucb_res]
     axes[3].plot(c_vals, vals4, "D-", color="#9b59b6", linewidth=2, markersize=7)
     axes[3].set_xlabel("exploration_c")
@@ -279,7 +290,6 @@ def _plot_exp2(adapt_res, poisson_res, ucb_res, intervals, costs, c_vals):
     axes[3].set_title("UCB Bandit: exploration_c\nvs Değişim Yakalama", fontweight="bold")
     axes[3].grid(alpha=0.3)
 
-    # UCB - c → Crawl Efficiency
     vals5 = [r.crawl_efficiency for _, r in ucb_res]
     axes[4].plot(c_vals, vals5, "P-", color="#e67e22", linewidth=2, markersize=7)
     axes[4].set_xlabel("exploration_c")
@@ -287,7 +297,6 @@ def _plot_exp2(adapt_res, poisson_res, ucb_res, intervals, costs, c_vals):
     axes[4].set_title("UCB Bandit: exploration_c\nvs Tarama Verimliliği", fontweight="bold")
     axes[4].grid(alpha=0.3)
 
-    # Poisson - crawl_cost → CDR
     vals6 = [r.change_detection_rate for _, r in poisson_res]
     axes[5].plot(costs, vals6, "h-", color="#1abc9c", linewidth=2, markersize=7)
     axes[5].set_xlabel("crawl_cost")
@@ -318,13 +327,7 @@ def experiment_3_budget_analysis():
     all_rows = []
     for budget in budgets:
         print(f"  Bütçe={budget}...")
-        schedulers = [
-            PeriodicScheduler(n_sites=20, budget_per_step=budget),
-            AdaptiveCrawler(n_sites=20, budget_per_step=budget),
-            PriorityQueueScheduler(n_sites=20, budget_per_step=budget),
-            PoissonMLEScheduler(n_sites=20, budget_per_step=budget),
-            UCBBanditScheduler(n_sites=20, budget_per_step=budget),
-        ]
+        schedulers = get_schedulers(n_sites=20, budget=budget)
         for sched in schedulers:
             res = evaluator.run(sched)
             row = res.summary()
@@ -384,13 +387,7 @@ def experiment_4_scalability():
         budget = max(1, n // 7)
         evaluator = Evaluator(env, n_steps=300, time_step=0.5)
 
-        schedulers = [
-            PeriodicScheduler(n_sites=n, budget_per_step=budget),
-            AdaptiveCrawler(n_sites=n, budget_per_step=budget),
-            PriorityQueueScheduler(n_sites=n, budget_per_step=budget),
-            PoissonMLEScheduler(n_sites=n, budget_per_step=budget),
-            UCBBanditScheduler(n_sites=n, budget_per_step=budget),
-        ]
+        schedulers = get_schedulers(n_sites=n, budget=budget)
         for sched in schedulers:
             res = evaluator.run(sched)
             row = res.summary()
@@ -446,9 +443,9 @@ def experiment_5_radar(results_exp1):
     metrics_radar = [
         "Data Freshness Rate",
         "Change Detection Rate",
-        "Wasted Crawl Ratio",  # ters çevrilecek
-        "Avg Staleness",       # ters çevrilecek
-        "Crawl Efficiency",    # ters çevrilecek
+        "Wasted Crawl Ratio", 
+        "Avg Staleness",      
+        "Crawl Efficiency",   
     ]
     labels = [
         "Veri\nGüncelliği",
@@ -459,7 +456,6 @@ def experiment_5_radar(results_exp1):
     ]
     invert = [False, False, True, True, True]
 
-    # Normalize [0,1]
     norm_df = df[metrics_radar].copy()
     for col in metrics_radar:
         mn, mx = norm_df[col].min(), norm_df[col].max()
