@@ -1,0 +1,6 @@
+Algorithm,Total Crawls,Changes Detected,Data Freshness Rate,Crawl Efficiency,Total Resource Cost,Change Detection Rate,Wasted Crawl Ratio,Avg Staleness,Throughput,Wall Clock Time (s)
+Periodic (Baseline),1500,999,0.666,0.3039,303.64,0.622,0.334,6.6592,6.012,0.03
+Adaptive Crawling,1500,479,0.3193,0.6343,303.84,0.2948,0.6807,12.0618,6.012,0.029
+Priority Queue,1500,484,0.3227,0.4699,227.43,0.2962,0.6773,13.6434,6.012,0.053
+Poisson MLE,1500,480,0.32,0.6465,310.32,0.289,0.68,12.0687,6.012,0.041
+UCB Bandit (c=1.0),1500,486,0.324,0.6203,301.45,0.3047,0.676,12.1956,6.012,0.07

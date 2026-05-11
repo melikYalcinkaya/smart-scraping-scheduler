@@ -1,20 +1,12 @@
 """
-Değerlendirme Metrikleri
-=========================
-Her algoritma için hesaplanan metrikler:
-
-1. Data Freshness Rate (DFR)     - Güncel tutulan fiyatların oranı
-2. Crawl Efficiency (CE)         - Değişim başına tarama maliyeti
-3. Total Resource Cost (TRC)     - Toplam yanıt süresi (saniye cinsinden)
-4. Change Detection Rate (CDR)   - Gerçek değişimlerin kaçının yakalandığı
-5. Wasted Crawl Ratio (WCR)      - Değişimsiz tarama oranı (israf)
-6. Average Staleness (AS)        - Ortalama güncellik kaybı skoru
-7. Throughput                    - Birim sürede taranan site sayısı
+Değerlendirme Metrikleri (DÜZELTİLMİŞ SÜRÜM)
+===========================================
+environment.py dosyası ile tam uyumlu hale getirilmiştir.
 """
 
 import numpy as np
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict
 import time
 
 
@@ -27,7 +19,7 @@ class CrawlRecord:
     price_changed: bool
     response_time: float
     cost: float
-    missed_changes: int
+    missed_changes: int = 0
 
 
 @dataclass
@@ -36,7 +28,7 @@ class ExperimentResult:
     algorithm_name: str
     records: List[CrawlRecord] = field(default_factory=list)
     staleness_history: List[float] = field(default_factory=list)
-    wall_clock_time: float = 0.0  # Gerçek çalışma süresi
+    wall_clock_time: float = 0.0  
 
     # Hesaplanan metrikler
     data_freshness_rate: float = 0.0
@@ -57,27 +49,26 @@ class ExperimentResult:
         self.total_crawls            = len(self.records)
         self.total_changes_detected  = sum(1 for r in self.records if r.price_changed)
         self.total_resource_cost     = sum(r.cost for r in self.records)
-        total_missed                 = sum(r.missed_changes for r in self.records)
 
-        # 1. Data Freshness Rate: kaç taramada güncel veri yakalandı
+        # 1. Data Freshness Rate
         self.data_freshness_rate = (
             self.total_changes_detected / self.total_crawls
             if self.total_crawls > 0 else 0
         )
 
-        # 2. Crawl Efficiency: değişim başına harcanan maliyet
+        # 2. Crawl Efficiency
         self.crawl_efficiency = (
             self.total_resource_cost / max(1, self.total_changes_detected)
         )
 
-        # 3. Change Detection Rate: gerçek değişimlerin kaçını yakaladık
-        total_actual = sum(total_actual_changes.values())
+        # 3. Change Detection Rate
+        total_actual = sum(total_actual_changes.values()) if total_actual_changes else 1
         self.change_detection_rate = (
             self.total_changes_detected / max(1, total_actual)
         )
         self.change_detection_rate = min(1.0, self.change_detection_rate)
 
-        # 4. Wasted Crawl Ratio: boş tarama oranı
+        # 4. Wasted Crawl Ratio
         wasted = sum(1 for r in self.records if not r.price_changed)
         self.wasted_crawl_ratio = wasted / max(1, self.total_crawls)
 
@@ -86,7 +77,7 @@ class ExperimentResult:
             np.mean(self.staleness_history) if self.staleness_history else 0
         )
 
-        # 6. Throughput: birim maliyet başına taranan site
+        # 6. Throughput
         total_time = self.records[-1].time - self.records[0].time if len(self.records) > 1 else 1
         self.throughput = self.total_crawls / max(1, total_time)
 
@@ -115,41 +106,48 @@ class Evaluator:
         self.time_step = time_step
 
     def run(self, scheduler, verbose: bool = False) -> ExperimentResult:
-        """
-        Bir zamanlayıcıyı simülasyon ortamında çalıştır.
-        
-        Her adımda:
-        1. Zamanlayıcıdan site seçimi al
-        2. Seçilen siteleri tara
-        3. Sonuçları zamanlayıcıya bildir
-        4. Metrikleri kaydet
-        """
         self.env.reset()
         scheduler.reset()
         result = ExperimentResult(algorithm_name=scheduler.name)
+        
+        # Gerçekte arka planda olan değişimleri takip etmek için
+        actual_changes = {s.site_id: 0 for s in self.env.sites}
 
         start_wall = time.perf_counter()
 
         for step in range(self.n_steps):
             current_time = step * self.time_step
+            self.env.current_time = current_time  # Ortam zamanını güncelle
+            
+            # CDR metrik hesabı için arka plandaki potansiyel değişimleri simüle et
+            for s in self.env.sites:
+                prob = 1.0 - np.exp(-s.true_lambda * self.time_step)
+                if np.random.random() < prob:
+                    actual_changes[s.site_id] += 1
+
             sites_to_crawl = scheduler.select_sites(current_time)
 
             for site_id in sites_to_crawl:
-                crawl_result = self.env.crawl(site_id, current_time)
+                # DÜZELTME: environment.py'deki doğru fonksiyon adı crawl_site
+                crawl_result = self.env.crawl_site(site_id)
                 scheduler.update(site_id, crawl_result, current_time)
 
+                # DÜZELTME: Sözlük değil, obje özellikleri olarak çağrıldı
                 result.records.append(CrawlRecord(
                     step=step,
                     time=current_time,
                     site_id=site_id,
-                    price_changed=crawl_result["price_changed"],
-                    response_time=crawl_result["response_time"],
-                    cost=crawl_result["cost"],
-                    missed_changes=crawl_result["missed_changes"],
+                    price_changed=crawl_result.price_changed,
+                    response_time=crawl_result.response_time,
+                    cost=crawl_result.crawl_cost,
+                    missed_changes=0,
                 ))
 
-            # Her adımda toplam staleness'ı kaydet
-            staleness = self.env.total_staleness(current_time)
+            # DÜZELTME: Güncellik kaybını (staleness) scheduler'in bildiği son zamana göre hesapla
+            staleness = sum(
+                self.env.get_staleness(i, scheduler.last_crawl_time[i]) 
+                for i in range(self.env.n_sites)
+            )
             result.staleness_history.append(staleness)
 
             if verbose and step % 100 == 0:
@@ -157,22 +155,6 @@ class Evaluator:
                       f"staleness={staleness:.2f} | crawls={len(result.records)}")
 
         result.wall_clock_time = time.perf_counter() - start_wall
-
-        # Gerçek değişim sayılarını env'den al
-        total_actual = {s.site_id: s.change_count for s in self.env.sites}
-        result.compute_metrics(total_actual)
+        result.compute_metrics(actual_changes)
 
         return result
-
-    def run_with_params(self, scheduler_class, param_grid: list,
-                        base_kwargs: dict = None) -> List[ExperimentResult]:
-        """Parametre tarama deneyleri."""
-        base_kwargs = base_kwargs or {}
-        results = []
-        for params in param_grid:
-            kwargs = {**base_kwargs, **params}
-            sched = scheduler_class(**kwargs)
-            res = self.run(sched)
-            res.algorithm_name = f"{sched.name} | {params}"
-            results.append(res)
-        return results

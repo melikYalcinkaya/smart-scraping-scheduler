@@ -40,14 +40,36 @@ class ECommerceEnvironment:
     def __init__(self, n_sites=12, seed=42):
         np.random.seed(seed)
         random.seed(seed)
-        self.n_sites = min(n_sites, len(self.SITE_CONFIGS))
-        self.sites = self.SITE_CONFIGS[:self.n_sites]
+        self.n_sites = n_sites
+        self.sites = self._build_sites(n_sites)
         self.reset()
+
+    def _build_sites(self, n_sites):
+        base = list(self.SITE_CONFIGS)
+        if n_sites <= len(base):
+            return base[:n_sites]
+
+        extra = []
+        categories = ["volatile", "moderate", "stable"]
+        lambdas = [0.75, 0.45, 0.12]
+        response_means = [1.0, 1.8, 2.5]
+        response_vars = [0.35, 0.55, 0.85]
+
+        for idx in range(len(base), n_sites):
+            cat = categories[idx % len(categories)]
+            lam = lambdas[idx % len(lambdas)] * (0.9 + 0.1 * ((idx % 3)))
+            rt = response_means[idx % len(response_means)] * (1.0 + 0.05 * ((idx // 3) % 3))
+            var = response_vars[idx % len(response_vars)]
+            name = f"Site{idx:02d}"
+            extra.append(SiteProfile(idx, name, lam, rt, var, cat))
+
+        return base + extra
 
     def reset(self):
         self.current_time = 0.0
         self.prices = {s.site_id: round(random.uniform(10, 500), 2) for s in self.sites}
         self.last_change_time = {s.site_id: 0.0 for s in self.sites}
+        self.change_count = {s.site_id: 0 for s in self.sites}
         self.total_crawls = 0
         self.total_cost = 0.0
 
